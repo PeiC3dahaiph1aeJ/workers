@@ -60,18 +60,22 @@ func (c *Client) Reserve(conn io.ReadWriteCloser) error {
 	defer bs.Close()
 	defer wg.Wait()
 
+	// by default do not block
+	reserve_timeout := time.Duration(0)
 	for {
-		wait := time.Second // how long to sleep when no jobs in queues
-
 		for name, tube := range tubes {
-			id, body, err := tube.Reserve(0 /* don't block others */)
+			id, body, err := tube.Reserve(reserve_timeout)
 			if err == nil {
-				wait = 0 // drain the queue as fast as possible
+				// got a job, do not block
+				reserve_timeout = time.Duration(0)
 				wg.Add(1)
 				go c.work(wg, NewJob(bs, name, id, body))
 			} else if !isTimeoutOrDeadline(err) {
 				c.Stop()
 				return err
+			} else {
+				// got no job, block for 1 second next time
+				reserve_timeout = time.Second
 			}
 			select {
 			case <-c.stop:
@@ -83,7 +87,7 @@ func (c *Client) Reserve(conn io.ReadWriteCloser) error {
 		select {
 		case <-c.stop:
 			return ErrClientHasQuit
-		case <-time.After(wait):
+		case <-time.After(0):
 		}
 	}
 }
